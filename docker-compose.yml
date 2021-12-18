@@ -1,0 +1,30 @@
+version: '3'
+
+services:
+  telehooks:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    privileged: true
+    volumes:
+      - .:/app
+    ports:
+      - "8443:8443"
+    depends_on:
+      - mq
+    command: python3 __main__.py
+
+  mq:
+    restart: always
+    image: rabbitmq:3.9.11
+    networks:
+      - default
+      - telehooks_mq
+
+volumes:
+  postgres_data: { }
+
+networks:
+  telehooks_mq:
+    external: true
