@@ -2,8 +2,6 @@ import asyncio
 import logging
 import typing
 import uuid
-import itertools
-from time import sleep
 
 import aio_pika
 import sentry_sdk
@@ -26,24 +24,15 @@ sentry_sdk.init(
 
 BOTS = utils.get_bots(CONFIG)
 WEBHOOK_PORT = CONFIG['port']
-
-LOOP = asyncio.new_event_loop()
-
-AMQP_CONNECTION = None
-for i in itertools.count():
-    try:
-        AMQP_CONNECTION = LOOP.run_until_complete(aio_pika.connect_robust(CONFIG['amqp_url'], loop=LOOP))
-    except ConnectionError:
-        if i == 60:
-            raise
-
-        logging.info('Waiting MQ...')
-        sleep(1)
-    else:
-        break
-
-AMQP_CHANNEL = LOOP.run_until_complete(AMQP_CONNECTION.channel())
+DROP_PENDING_UPDATES = CONFIG['drop_pending_updates']
+MAX_CONNECTIONS = CONFIG['max_connections']
+AMQP_URL = CONFIG['amqp_url']
 AMQP_MSG_EXPIRATION = CONFIG['amqp_msg_expiration']
+
+loop = asyncio.new_event_loop()
+
+amqp_connection = loop.run_until_complete(aio_pika.connect_robust(AMQP_URL, loop=loop, timeout=60))
+amqp_channel = loop.run_until_complete(amqp_connection.channel())
 
 
 async def init_handlers(app: web.Application) -> None:
@@ -58,8 +47,8 @@ async def init_handlers(app: web.Application) -> None:
                     url,
                     certificate=cert,
                     ip_address=ip,
-                    drop_pending_updates=True,
-                    max_connections=40,
+                    drop_pending_updates=DROP_PENDING_UPDATES,
+                    max_connections=MAX_CONNECTIONS,
                 )
 
         return _on_startup
@@ -72,7 +61,7 @@ async def init_handlers(app: web.Application) -> None:
 
     def _create_handler(routing_key: str) -> typing.Callable:
         async def _handle(request: web.Request) -> web.Response:
-            await AMQP_CHANNEL.default_exchange.publish(
+            await amqp_channel.default_exchange.publish(
                 aio_pika.Message(await request.read(), expiration=AMQP_MSG_EXPIRATION),
                 routing_key=routing_key,
             )
@@ -84,7 +73,7 @@ async def init_handlers(app: web.Application) -> None:
         endpoint_for_webhook = str(uuid.uuid4())
         webhook_url = f'https://{ip}:{WEBHOOK_PORT}/{endpoint_for_webhook}/'
 
-        await AMQP_CHANNEL.declare_queue(bot_slug, auto_delete=True)
+        await amqp_channel.declare_queue(bot_slug)
 
         app.router.add_post(f'/{endpoint_for_webhook}/', _create_handler(bot_slug))
         app.on_startup.append(_create_on_startup(bot, webhook_url))
@@ -96,7 +85,7 @@ async def on_startup(app: web.Application) -> None:
 
 
 async def on_shutdown(app: web.Application) -> None:
-    await AMQP_CONNECTION.close()
+    await amqp_connection.close()
 
 
 def main() -> typing.NoReturn:
@@ -104,16 +93,16 @@ def main() -> typing.NoReturn:
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
 
-    LOOP.run_until_complete(init_handlers(app))
+    loop.run_until_complete(init_handlers(app))
 
     web.run_app(
         app,
         host='0.0.0.0',
         port=WEBHOOK_PORT,
-        ssl_context=LOOP.run_until_complete(utils.get_ssl_context()),
-        loop=LOOP,
+        ssl_context=loop.run_until_complete(utils.get_ssl_context()),
+        loop=loop,
     )
 
 
 main()
-LOOP.close()
+loop.close()

@@ -4,6 +4,8 @@
   "amqp_url": "amqp://mq:5672/",
   "amqp_msg_expiration": 600,
   "sentry_dsn": "<sentry_dsn>",
+  "drop_pending_updates": true,
+  "max_connections": 20,
   "bots": [
     {
       "slug": "bo1",
