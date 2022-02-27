@@ -8,8 +8,8 @@
   "max_connections": 20,
   "bots": [
     {
-      "slug": "bo1",
-      "token": "<token>>"
+      "slug": "<name>",
+      "token": "<token>"
     }
   ]
 }
