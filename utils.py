@@ -1,9 +1,13 @@
+import asyncio
 import json
+import logging
 import os
 import ssl
 import typing
 
+import aio_pika
 import aiohttp
+from aio_pika.abc import AbstractRobustConnection
 from aiogram import Bot
 
 
@@ -44,3 +48,17 @@ async def get_ssl_context() -> ssl.SSLContext:
     ssl_context.load_cert_chain(certfile=webhook_ssl_pem, keyfile=webhook_ssl_key)
 
     return ssl_context
+
+
+async def connect_robust_to_mq(*args, **kwargs) -> AbstractRobustConnection:
+    max_retries = 20
+
+    for i in range(max_retries):
+        try:
+            return await aio_pika.connect_robust(*args, **kwargs)
+        except ConnectionError:
+            if i + 1 == max_retries:
+                raise
+
+            logging.info('Waiting...')
+            await asyncio.sleep(1)

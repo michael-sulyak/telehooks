@@ -31,7 +31,7 @@ AMQP_MSG_EXPIRATION = CONFIG['amqp_msg_expiration']
 
 loop = asyncio.new_event_loop()
 
-amqp_connection = loop.run_until_complete(aio_pika.connect_robust(AMQP_URL, loop=loop, timeout=60))
+amqp_connection = loop.run_until_complete(utils.connect_robust_to_mq(AMQP_URL, loop=loop, timeout=60))
 amqp_channel = loop.run_until_complete(amqp_connection.channel())
 
 
