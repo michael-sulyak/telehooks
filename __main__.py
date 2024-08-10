@@ -6,6 +6,7 @@ import uuid
 import aio_pika
 import sentry_sdk
 from aiogram import Bot
+from aiogram.types import FSInputFile
 from aiohttp import web
 from sentry_sdk.integrations.aiohttp import AioHttpIntegration
 
@@ -42,14 +43,13 @@ async def init_handlers(app: web.Application) -> None:
     def _create_on_startup(bot_: Bot, url: str) -> typing.Callable:
         async def _on_startup(app_: web.Application) -> None:
             logging.info('Listening %s...', url)
-            with open(webhook_ssl_pem) as cert:
-                await bot_.set_webhook(
-                    url,
-                    certificate=cert,
-                    ip_address=ip,
-                    drop_pending_updates=DROP_PENDING_UPDATES,
-                    max_connections=MAX_CONNECTIONS,
-                )
+            await bot_.set_webhook(
+                url,
+                certificate=FSInputFile(path=webhook_ssl_pem),
+                ip_address=ip,
+                drop_pending_updates=DROP_PENDING_UPDATES,
+                max_connections=MAX_CONNECTIONS,
+            )
 
         return _on_startup
 

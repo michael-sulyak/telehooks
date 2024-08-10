@@ -16,7 +16,7 @@ services:
 
   mq:
     restart: always
-    image: rabbitmq:3.9.11
+    image: rabbitmq:3.13.6
     networks:
       - default
       - telehooks_mq
