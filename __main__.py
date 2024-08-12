@@ -10,46 +10,45 @@ from aiogram.types import FSInputFile
 from aiohttp import web
 from sentry_sdk.integrations.aiohttp import AioHttpIntegration
 
+import config
 import utils
 
 
-CONFIG = utils.get_config()
-
-logging_level = logging.DEBUG if CONFIG['debug'] else logging.INFO
+logging_level = logging.DEBUG if config.DEBUG else logging.INFO
 logging.basicConfig(level=logging_level)
 
 sentry_sdk.init(
-    dsn=CONFIG['sentry_dsn'],
+    dsn=config.SENTRY_DSN,
     integrations=(AioHttpIntegration(),),
 )
 
-BOTS = utils.get_bots(CONFIG)
-WEBHOOK_PORT = CONFIG['port']
-DROP_PENDING_UPDATES = CONFIG['drop_pending_updates']
-MAX_CONNECTIONS = CONFIG['max_connections']
-AMQP_URL = CONFIG['amqp_url']
-AMQP_MSG_EXPIRATION = CONFIG['amqp_msg_expiration']
-
-loop = asyncio.new_event_loop()
-
-amqp_connection = loop.run_until_complete(utils.connect_robust_to_mq(AMQP_URL, loop=loop, timeout=60))
-amqp_channel = loop.run_until_complete(amqp_connection.channel())
+amqp_connection = None
 
 
 async def init_handlers(app: web.Application) -> None:
+    global amqp_connection
+
+    logging.info('Initializing AMQP connection...')
+    amqp_connection = await utils.connect_robust_to_mq(config.AMQP_URL, timeout=60)
+    logging.info('AMQP connection established.')
+
+    amqp_channel = await amqp_connection.channel()
+
     ip = await utils.get_my_ip()
-    webhook_ssl_pem = './certificate/cert.pem'
 
     def _create_on_startup(bot_: Bot, url: str) -> typing.Callable:
         async def _on_startup(app_: web.Application) -> None:
-            logging.info('Listening %s...', url)
+            logging.info('Setting webhook...')
+
             await bot_.set_webhook(
-                url,
-                certificate=FSInputFile(path=webhook_ssl_pem),
+                url=url,
+                certificate=FSInputFile(path=config.SSL_CERT_PATH),
                 ip_address=ip,
-                drop_pending_updates=DROP_PENDING_UPDATES,
-                max_connections=MAX_CONNECTIONS,
+                drop_pending_updates=config.DROP_PENDING_UPDATES,
+                max_connections=config.MAX_CONNECTIONS,
             )
+
+            logging.info('Listening %s...', url)
 
         return _on_startup
 
@@ -62,19 +61,22 @@ async def init_handlers(app: web.Application) -> None:
     def _create_handler(routing_key: str) -> typing.Callable:
         async def _handle(request: web.Request) -> web.Response:
             await amqp_channel.default_exchange.publish(
-                aio_pika.Message(await request.read(), expiration=AMQP_MSG_EXPIRATION),
+                aio_pika.Message(await request.read(), expiration=config.AMQP_MSG_EXPIRATION),
                 routing_key=routing_key,
             )
+
             return web.Response()
 
         return _handle
 
-    for bot_slug, bot in BOTS.items():
+    for bot_slug, bot in config.BOTS.items():
         endpoint_for_webhook = str(uuid.uuid4())
-        webhook_url = f'https://{ip}:{WEBHOOK_PORT}/{endpoint_for_webhook}/'
+        webhook_url = f'https://{ip}:{config.WEBHOOK_PORT}/{endpoint_for_webhook}/'
 
+        logging.info('Declaring queue "%s"...', bot_slug)
         await amqp_channel.declare_queue(bot_slug)
 
+        logging.info('Creating handler for %s...', bot_slug)
         app.router.add_post(f'/{endpoint_for_webhook}/', _create_handler(bot_slug))
         app.on_startup.append(_create_on_startup(bot, webhook_url))
         app.on_shutdown.append(_create_on_shutdown(bot))
@@ -85,24 +87,39 @@ async def on_startup(app: web.Application) -> None:
 
 
 async def on_shutdown(app: web.Application) -> None:
-    await amqp_connection.close()
+    if amqp_connection is not None:
+        await amqp_connection.close()
 
 
 def main() -> typing.NoReturn:
+    logging.info('Getting the current IP... ')
+    ip = asyncio.run(utils.get_my_ip())
+    logging.info('Current IP: %s', ip)
+
+    logging.info('Generating SSL certificate...')
+    utils.generate_ssl_certificate(
+        ip=ip,
+        ssl_key_path=config.SSL_KEY_PATH,
+        ssl_cert_path=config.SSL_CERT_PATH,
+    )
+    logging.info('SSL certificate has been generated')
+
     app = web.Application()
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
 
-    loop.run_until_complete(init_handlers(app))
+    asyncio.run(init_handlers(app))
 
     web.run_app(
         app,
         host='0.0.0.0',
-        port=WEBHOOK_PORT,
-        ssl_context=loop.run_until_complete(utils.get_ssl_context()),
-        loop=loop,
+        port=config.WEBHOOK_PORT,
+        ssl_context=utils.get_ssl_context(
+            ssl_key_path=config.SSL_KEY_PATH,
+            ssl_cert_path=config.SSL_CERT_PATH,
+        ),
     )
 
 
-main()
-loop.close()
+if __name__ == '__main__':
+    main()
