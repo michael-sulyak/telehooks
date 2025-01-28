@@ -9,6 +9,6 @@ RUN python3 -m pip install --upgrade setuptools && \
 COPY ./pyproject.toml /app
 COPY ./poetry.lock /app
 RUN poetry config virtualenvs.create false && \
-    poetry install
+    poetry install --no-root
 
 EXPOSE 8080
