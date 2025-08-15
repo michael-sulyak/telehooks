@@ -89,7 +89,7 @@ async def init_handlers(app: web.Application) -> None:
                     body,
                     content_type='application/json',
                     delivery_mode=aio_pika.DeliveryMode.NOT_PERSISTENT,
-                    expiration=config.AMQP_MSG_EXPIRATION,  # ensure correct units
+                    expiration=config.AMQP_MSG_EXPIRATION,
                 )
                 await ensure_channel()
                 await amqp_channel.default_exchange.publish(
