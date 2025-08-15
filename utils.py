@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import ssl
+import subprocess
 import typing
 
 import aio_pika
@@ -33,19 +34,30 @@ async def get_my_ip() -> str:
 
 
 def generate_ssl_certificate(*, ip: str, ssl_cert_path: str, ssl_key_path: str) -> None:
-    os.system('mkdir certificate >/dev/null 2>&1')
+    cert_dir = os.path.dirname(ssl_cert_path)
+    os.makedirs(cert_dir, exist_ok=True)
 
-    os.system(
-        f'openssl req -newkey rsa:2048 -sha256 -nodes -keyout {ssl_key_path} -x509 -days 365 '
-        f'-out {ssl_cert_path} -subj "/C=US/ST=New York/L=Brooklyn/O=Example Brooklyn Company/CN={ip}" '
-        f'>/dev/null 2>&1'
-    )
+    cmd = [
+        'openssl', 'req',
+        '-newkey', 'rsa:2048',
+        '-sha256', '-nodes',
+        '-keyout', ssl_key_path,
+        '-x509', '-days', '365',
+        '-out', ssl_cert_path,
+        '-subj', f'/C=US/ST=NY/L=Brooklyn/O=Telehooks/CN={ip}',
+        '-addext', f'subjectAltName=IP:{ip}',
+    ]
+
+    subprocess.run(cmd, check=True)
+
+    os.chmod(ssl_key_path, 0o600)
 
 
 def get_ssl_context(*, ssl_cert_path: str, ssl_key_path: str) -> ssl.SSLContext:
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
-    ssl_context.load_cert_chain(certfile=ssl_cert_path, keyfile=ssl_key_path)
-    return ssl_context
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(certfile=ssl_cert_path, keyfile=ssl_key_path)
+    return ctx
 
 
 async def connect_robust_to_mq(*args, **kwargs) -> AbstractRobustConnection:

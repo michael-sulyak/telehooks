@@ -1,5 +1,7 @@
 import asyncio
+import hmac
 import logging
+import secrets
 import typing
 import uuid
 
@@ -24,30 +26,37 @@ sentry_sdk.init(
 
 loop = asyncio.new_event_loop()
 amqp_connection = None
+amqp_channel = None
 
 
 async def init_handlers(app: web.Application) -> None:
-    global amqp_connection
+    global amqp_connection, amqp_channel
+
+    # Pre-generate one stable token per bot (in-memory for this process)
+    secret_tokens_map: dict[str, str] = {
+        slug: secrets.token_urlsafe(32)
+        for slug in config.BOTS.keys()
+    }
 
     logging.info('Initializing AMQP connection...')
-    amqp_connection = await utils.connect_robust_to_mq(config.AMQP_URL, loop=loop, timeout=60)
+    amqp_connection = await utils.connect_robust_to_mq(config.AMQP_URL, timeout=60)
     logging.info('AMQP connection established.')
 
     ip = await utils.get_my_ip()
+    amqp_channel = await amqp_connection.channel()
 
-    def _create_on_startup(bot_: Bot, url: str) -> typing.Callable:
+    def _create_on_startup(bot_: Bot, slug: str, url: str) -> typing.Callable:
         async def _on_startup(app_: web.Application) -> None:
-            logging.info('Setting webhook...')
-
+            logging.info('Setting webhook for %s...', slug)
             await bot_.set_webhook(
                 url=url,
                 certificate=FSInputFile(path=config.SSL_CERT_PATH),
                 ip_address=ip,
+                secret_token=secret_tokens_map[slug],
                 drop_pending_updates=config.DROP_PENDING_UPDATES,
                 max_connections=config.MAX_CONNECTIONS,
             )
-
-            logging.info('Listening %s...', url)
+            logging.info('Listening %s for %s', url, slug)
 
         return _on_startup
 
@@ -57,37 +66,45 @@ async def init_handlers(app: web.Application) -> None:
 
         return _on_shutdown
 
-    def _create_handler(routing_key: str) -> typing.Callable:
+    def _create_handler(slug: str) -> typing.Callable:
         async def _handle(request: web.Request) -> web.Response:
-            amqp_channel = await amqp_connection.channel()
+            provided = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
+            expected = secret_tokens_map.get(slug)
+            if not expected or not hmac.compare_digest(provided, expected):
+                return web.Response(status=401)
 
             try:
-                await amqp_channel.default_exchange.publish(
-                    aio_pika.Message(await request.read(), expiration=config.AMQP_MSG_EXPIRATION),
-                    routing_key=routing_key,
+                body = await request.read()
+                message = aio_pika.Message(
+                    body,
+                    content_type='application/json',
+                    delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                    expiration=config.AMQP_MSG_EXPIRATION,  # ensure correct units
                 )
-            finally:
-                await amqp_channel.close()
+                await amqp_channel.default_exchange.publish(
+                    message,
+                    routing_key=slug,
+                    mandatory=True,
+                )
+            except Exception:
+                logging.exception('Publish failed')
+                return web.Response(status=500)
 
-            return web.Response()
+            return web.Response(status=200)
 
         return _handle
-
-    amqp_channel = await amqp_connection.channel()
 
     for bot_slug, bot in config.BOTS.items():
         endpoint_for_webhook = str(uuid.uuid4())
         webhook_url = f'https://{ip}:{config.WEBHOOK_PORT}/{endpoint_for_webhook}/'
 
         logging.info('Declaring queue "%s"...', bot_slug)
-        await amqp_channel.declare_queue(bot_slug)
+        await amqp_channel.declare_queue(bot_slug, durable=True)
 
         logging.info('Creating handler for %s...', bot_slug)
         app.router.add_post(f'/{endpoint_for_webhook}/', _create_handler(bot_slug))
-        app.on_startup.append(_create_on_startup(bot, webhook_url))
+        app.on_startup.append(_create_on_startup(bot, bot_slug, webhook_url))
         app.on_shutdown.append(_create_on_shutdown(bot))
-
-    await amqp_channel.close()
 
 
 async def on_startup(app: web.Application) -> None:
@@ -97,13 +114,16 @@ async def on_startup(app: web.Application) -> None:
 async def on_shutdown(app: web.Application) -> None:
     logging.info('Stopping...')
 
+    if amqp_channel is not None:
+        await amqp_channel.close()
+
     if amqp_connection is not None:
         await amqp_connection.close()
 
 
 def main() -> typing.NoReturn:
     logging.info('Getting the current IP... ')
-    ip = loop.run_until_complete(utils.get_my_ip())
+    ip = asyncio.run(utils.get_my_ip())
     logging.info('Current IP: %s', ip)
 
     logging.info('Generating SSL certificate...')
@@ -118,17 +138,16 @@ def main() -> typing.NoReturn:
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
 
-    loop.run_until_complete(init_handlers(app))
+    asyncio.run(init_handlers(app))
 
     web.run_app(
         app,
         host='0.0.0.0',
-        port=config.WEBHOOK_PORT,
+        port=int(config.WEBHOOK_PORT),
         ssl_context=utils.get_ssl_context(
             ssl_key_path=config.SSL_KEY_PATH,
             ssl_cert_path=config.SSL_CERT_PATH,
         ),
-        loop=loop,
     )
 
 
