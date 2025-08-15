@@ -28,6 +28,16 @@ loop = asyncio.new_event_loop()
 amqp_connection = None
 amqp_channel = None
 
+channel_lock = asyncio.Lock()
+
+
+async def ensure_channel() -> None:
+    global amqp_connection, amqp_channel
+
+    async with channel_lock:
+        if amqp_channel is None or amqp_channel.is_closed:
+            amqp_channel = await amqp_connection.channel()
+
 
 async def init_handlers(app: web.Application) -> None:
     global amqp_connection, amqp_channel
@@ -78,9 +88,10 @@ async def init_handlers(app: web.Application) -> None:
                 message = aio_pika.Message(
                     body,
                     content_type='application/json',
-                    delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                    delivery_mode=aio_pika.DeliveryMode.NOT_PERSISTENT,
                     expiration=config.AMQP_MSG_EXPIRATION,  # ensure correct units
                 )
+                await ensure_channel()
                 await amqp_channel.default_exchange.publish(
                     message,
                     routing_key=slug,
@@ -99,7 +110,7 @@ async def init_handlers(app: web.Application) -> None:
         webhook_url = f'https://{ip}:{config.WEBHOOK_PORT}/{endpoint_for_webhook}/'
 
         logging.info('Declaring queue "%s"...', bot_slug)
-        await amqp_channel.declare_queue(bot_slug, durable=True)
+        await amqp_channel.declare_queue(bot_slug)
 
         logging.info('Creating handler for %s...', bot_slug)
         app.router.add_post(f'/{endpoint_for_webhook}/', _create_handler(bot_slug))
@@ -123,7 +134,7 @@ async def on_shutdown(app: web.Application) -> None:
 
 def main() -> typing.NoReturn:
     logging.info('Getting the current IP... ')
-    ip = asyncio.run(utils.get_my_ip())
+    ip = loop.run_until_complete(utils.get_my_ip())
     logging.info('Current IP: %s', ip)
 
     logging.info('Generating SSL certificate...')
@@ -138,7 +149,7 @@ def main() -> typing.NoReturn:
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
 
-    asyncio.run(init_handlers(app))
+    loop.run_until_complete(init_handlers(app))
 
     web.run_app(
         app,
@@ -148,6 +159,7 @@ def main() -> typing.NoReturn:
             ssl_key_path=config.SSL_KEY_PATH,
             ssl_cert_path=config.SSL_CERT_PATH,
         ),
+        loop=loop,
     )
 
 
