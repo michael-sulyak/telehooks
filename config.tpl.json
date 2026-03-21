@@ -6,6 +6,7 @@
   "sentry_dsn": "<sentry_dsn>",
   "drop_pending_updates": true,
   "max_connections": 20,
+  "proxy": null,
   "bots": [
     {
       "slug": "<name>",

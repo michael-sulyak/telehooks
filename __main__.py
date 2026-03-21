@@ -42,10 +42,12 @@ async def ensure_channel() -> None:
 async def init_handlers(app: web.Application) -> None:
     global amqp_connection, amqp_channel
 
+    bots = utils.get_bots(config.BOTS_INFO)
+
     # Pre-generate one stable token per bot (in-memory for this process)
     secret_tokens_map: dict[str, str] = {
         slug: secrets.token_urlsafe(32)
-        for slug in config.BOTS.keys()
+        for slug in bots.keys()
     }
 
     logging.info('Initializing AMQP connection...')
@@ -105,7 +107,7 @@ async def init_handlers(app: web.Application) -> None:
 
         return _handle
 
-    for bot_slug, bot in config.BOTS.items():
+    for bot_slug, bot in bots.items():
         endpoint_for_webhook = str(uuid.uuid4())
         webhook_url = f'https://{ip}:{config.WEBHOOK_PORT}/{endpoint_for_webhook}/'
 

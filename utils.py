@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import os
 import ssl
@@ -12,15 +11,12 @@ from aio_pika.abc import AbstractRobustConnection
 from aiogram import Bot
 from async_lru import alru_cache
 
-
-def load_config(file_path: str = './config.json') -> dict:
-    with open(file_path) as file:
-        return json.load(file)
+import config
 
 
 def get_bots(raw_bots: list[dict]) -> typing.Dict[str, Bot]:
     return {
-        raw_bot['slug']: Bot(token=raw_bot['token'])
+        raw_bot['slug']: Bot(token=raw_bot['token'], proxy=config.PROXY)
         for raw_bot in raw_bots
     }
 
