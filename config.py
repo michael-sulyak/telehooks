@@ -18,3 +18,6 @@ AMQP_MSG_EXPIRATION = RAW_CONFIG['amqp_msg_expiration']
 PROXY = RAW_CONFIG.get('proxy')
 SSL_CERT_PATH = './certificate/cert.pem'
 SSL_KEY_PATH = './certificate/private.key'
+
+USE_PULL_STRATEGY = RAW_CONFIG.get('use_pull_strategy', False)
+PULL_INTERVAL = max(float(RAW_CONFIG.get('pull_interval', 1)), 0.1)

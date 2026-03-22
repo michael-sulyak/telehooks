@@ -7,6 +7,8 @@
   "drop_pending_updates": true,
   "max_connections": 20,
   "proxy": null,
+  "use_pull_strategy": false,
+  "pull_interval": 1,
   "bots": [
     {
       "slug": "<name>",
