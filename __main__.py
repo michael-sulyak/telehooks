@@ -43,7 +43,7 @@ async def ensure_channel() -> None:
             amqp_channel = await amqp_connection.channel()
 
 
-async def publish_update(*, slug: str, body: bytes) -> None:
+async def publish_update(*, bot_slug: str, body: bytes) -> None:
     message = aio_pika.Message(
         body,
         content_type='application/json',
@@ -53,7 +53,7 @@ async def publish_update(*, slug: str, body: bytes) -> None:
     await ensure_channel()
     await amqp_channel.default_exchange.publish(
         message,
-        routing_key=slug,
+        routing_key=bot_slug,
         mandatory=True,
     )
 
@@ -140,7 +140,7 @@ async def init_webhook_handlers(app: web.Application) -> None:
 
             try:
                 body = await request.read()
-                await publish_update(slug=slug, body=body)
+                await publish_update(bot_slug=slug, body=body)
             except Exception:
                 logging.exception('Publish failed')
                 return web.Response(status=500)
@@ -159,8 +159,8 @@ async def init_webhook_handlers(app: web.Application) -> None:
         app.on_shutdown.append(_create_on_shutdown(bot))
 
 
-async def poll_bot_updates(bot: Bot, slug: str) -> None:
-    logging.info('Starting pull strategy for %s...', slug)
+async def poll_bot_updates(*, bot: Bot, bot_slug: str) -> None:
+    logging.info('Starting pull strategy for %s...', bot_slug)
 
     offset = None
 
@@ -172,7 +172,7 @@ async def poll_bot_updates(bot: Bot, slug: str) -> None:
                 )
                 break
             except Exception:
-                logging.exception('Failed to disable webhook for %s', slug)
+                logging.exception('Failed to disable webhook for %s', bot_slug)
                 await asyncio.sleep(config.PULL_INTERVAL)
 
         while True:
@@ -181,21 +181,21 @@ async def poll_bot_updates(bot: Bot, slug: str) -> None:
                     updates = await bot.get_updates(
                         offset=offset,
                         limit=100,
-                        timeout=0,
+                        timeout=60,
                     )
 
                     if not updates:
                         break
 
                     for update in updates:
-                        await publish_update(slug=slug, body=serialize_update(update))
+                        await publish_update(bot_slug=bot_slug, body=serialize_update(update))
                         offset = update.update_id + 1
             except Exception:
-                logging.exception('Pull strategy failed for %s', slug)
+                logging.exception('Pull strategy failed for %s', bot_slug)
 
             await asyncio.sleep(config.PULL_INTERVAL)
     except asyncio.CancelledError:
-        logging.info('Pull strategy stopped for %s', slug)
+        logging.info('Pull strategy stopped for %s', bot_slug)
         raise
 
 
@@ -204,7 +204,7 @@ async def start_pull_mode() -> None:
 
     for bot_slug, bot in bots.items():
         poller_tasks[bot_slug] = asyncio.create_task(
-            poll_bot_updates(bot, bot_slug),
+            poll_bot_updates(bot=bot, bot_slug=bot_slug),
         )
 
 

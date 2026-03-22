@@ -9,14 +9,20 @@ import aio_pika
 import aiohttp
 from aio_pika.abc import AbstractRobustConnection
 from aiogram import Bot
+from aiogram.client.session.aiohttp import AiohttpSession
 from async_lru import alru_cache
 
 import config
 
 
 def get_bots(raw_bots: list[dict]) -> typing.Dict[str, Bot]:
+    if config.PROXY:
+        session = AiohttpSession(proxy=config.PROXY)
+    else:
+        session = None
+
     return {
-        raw_bot['slug']: Bot(token=raw_bot['token'], proxy=config.PROXY)
+        raw_bot['slug']: Bot(token=raw_bot['token'], session=session)
         for raw_bot in raw_bots
     }
 
